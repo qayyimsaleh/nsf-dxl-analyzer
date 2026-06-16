@@ -1,0 +1,237 @@
+Sub Initialize
+    Dim sess As New NotesSession
+    Dim db As NotesDatabase
+    Dim out As String
+    Dim noteID As String
+    Dim note As NotesDocument
+    Dim title As String
+    Dim flags As String
+    Dim i As Integer
+    Dim j As Integer
+    Dim vType As String
+    Dim status As String
+    Dim lvl As String
+    Dim entryType As String
+    Dim aFlags As String
+    Dim forms As String
+    Dim subforms As String
+    Dim pages As String
+    Dim framesets As String
+    Dim outlines As String
+    Dim sf As NotesForm
+    Dim sfFields As Variant
+    Dim remForm As NotesForm
+    Dim remFields As Variant
+    Dim acl As NotesACL
+    Dim aclEntry As NotesACLEntry
+    Dim ncForms As NotesNoteCollection
+    Dim ncSF As NotesNoteCollection
+    Dim ncAgents As NotesNoteCollection
+    Dim ncAll As NotesNoteCollection
+    Dim stream As NotesStream
+    Dim exporter As NotesDXLExporter
+    Dim dxl As String
+    Dim chunkSize As Long
+    Dim pos As Long
+    Dim fileNum As Integer
+    Dim fileNum2 As Integer
+    Dim dbStem As String
+    Dim invPath As String
+    Dim dxlPath As String
+    Dim sfName As String
+
+    Set db = sess.CurrentDatabase
+
+    dbStem = db.Title
+    dbStem = Replace(dbStem, "/", "_")
+    dbStem = Replace(dbStem, "\", "_")
+    dbStem = Replace(dbStem, ":", "_")
+    dbStem = Replace(dbStem, "*", "_")
+    dbStem = Replace(dbStem, "?", "_")
+    dbStem = Replace(dbStem, "<", "_")
+    dbStem = Replace(dbStem, ">", "_")
+    dbStem = Replace(dbStem, "|", "_")
+    dbStem = Replace(dbStem, Chr(34), "_")
+    invPath = "D:\XML\" & dbStem & "_inventory.txt"
+    dxlPath = "D:\XML\" & dbStem & "_dxl.xml"
+
+    out = "DATABASE : " & db.Title & Chr(10)
+    out = out & "PATH     : " & db.FilePath & Chr(10)
+    out = out & "DATE     : " & CStr(Now()) & Chr(10)
+    out = out & String(60, "=") & Chr(10)
+
+    ' ══════════════════════════════════════════════════════════
+    ' 1. FORM-CLASS NOTES
+    ' ══════════════════════════════════════════════════════════
+    Set ncForms = db.CreateNoteCollection(False)
+    ncForms.SelectForms = True
+    Call ncForms.BuildCollection
+
+    forms = "" : subforms = "" : pages = "" : framesets = "" : outlines = ""
+
+    noteID = ncForms.GetFirstNoteID()
+    Do While noteID <> ""
+        Set note = db.GetDocumentByID(noteID)
+        title = CStr(note.GetItemValue("$TITLE")(0))
+        flags = CStr(note.GetItemValue("$Flags")(0))
+        If InStr(flags, "r") > 0 Then
+            framesets = framesets & "  " & title & Chr(10)
+        ElseIf InStr(flags, "W") > 0 Then
+            pages = pages & "  " & title & Chr(10)
+        ElseIf InStr(flags, "U") > 0 Then
+            subforms = subforms & "  " & title & Chr(10)
+        ElseIf InStr(flags, "O") > 0 Then
+            outlines = outlines & "  " & title & Chr(10)
+        Else
+            forms = forms & "  " & title & Chr(10)
+        End If
+        noteID = ncForms.GetNextNoteID(noteID)
+    Loop
+
+    out = out & Chr(10) & "=== FRAMESETS ===" & Chr(10)
+    If framesets = "" Then out = out & "  (none)" & Chr(10) Else out = out & framesets
+    out = out & Chr(10) & "=== PAGES ===" & Chr(10)
+    If pages = "" Then out = out & "  (none)" & Chr(10) Else out = out & pages
+    out = out & Chr(10) & "=== OUTLINES ===" & Chr(10)
+    If outlines = "" Then out = out & "  (none)" & Chr(10) Else out = out & outlines
+    out = out & Chr(10) & "=== SUBFORMS (via $Flags) ===" & Chr(10)
+    If subforms = "" Then out = out & "  (none via $Flags)" & Chr(10) Else out = out & subforms
+    out = out & Chr(10) & "=== FORMS ===" & Chr(10)
+    If forms = "" Then out = out & "  (none)" & Chr(10) Else out = out & forms
+
+    ' ══════════════════════════════════════════════════════════
+    ' 2. SUBFORMS (auto-detect via SelectSubforms)
+    ' ══════════════════════════════════════════════════════════
+    out = out & Chr(10) & "=== SUBFORMS ===" & Chr(10)
+    Set ncSF = db.CreateNoteCollection(False)
+    ncSF.SelectSubforms = True
+    Call ncSF.BuildCollection
+    noteID = ncSF.GetFirstNoteID()
+    Do While noteID <> ""
+        Set note = db.GetDocumentByID(noteID)
+        sfName = CStr(note.GetItemValue("$TITLE")(0))
+        out = out & "  SUBFORM: " & sfName & Chr(10)
+        Set sf = db.GetForm(sfName)
+        If Not sf Is Nothing Then
+            sfFields = sf.Fields
+            If IsArray(sfFields) Then
+                For j = 0 To UBound(sfFields)
+                    out = out & "    - " & CStr(sfFields(j)) & Chr(10)
+                Next j
+            End If
+        End If
+        noteID = ncSF.GetNextNoteID(noteID)
+    Loop
+
+    ' ══════════════════════════════════════════════════════════
+    ' 3. AGENTS
+    ' ══════════════════════════════════════════════════════════
+    Dim ncAgents2 As NotesNoteCollection
+    Set ncAgents2 = db.CreateNoteCollection(False)
+    ncAgents2.SelectAgents = True
+    Call ncAgents2.BuildCollection
+
+    out = out & Chr(10) & "=== AGENTS ===" & Chr(10)
+    noteID = ncAgents2.GetFirstNoteID()
+    Do While noteID <> ""
+        Set note = db.GetDocumentByID(noteID)
+        title = CStr(note.GetItemValue("$TITLE")(0))
+        aFlags = ""
+        On Error Resume Next
+        aFlags = CStr(note.GetItemValue("$AssistFlags")(0))
+        On Error GoTo 0
+        If InStr(aFlags, "E") > 0 Then status = "[ENABLED]" Else status = "[DISABLED]"
+        out = out & "  " & title & " " & status & Chr(10)
+        noteID = ncAgents2.GetNextNoteID(noteID)
+    Loop
+
+    ' ══════════════════════════════════════════════════════════
+    ' 4. ACL
+    ' ══════════════════════════════════════════════════════════
+    out = out & Chr(10) & "=== ACCESS CONTROL LIST ===" & Chr(10)
+    On Error Resume Next
+    Set acl = db.ACL
+    Set aclEntry = acl.GetFirstEntry()
+    Do While Not aclEntry Is Nothing
+        Select Case aclEntry.Level
+        Case 0 : lvl = "No Access"
+        Case 1 : lvl = "Depositor"
+        Case 2 : lvl = "Reader"
+        Case 3 : lvl = "Author"
+        Case 4 : lvl = "Editor"
+        Case 5 : lvl = "Designer"
+        Case 6 : lvl = "Manager"
+        End Select
+        Select Case aclEntry.UserType
+        Case 0 : entryType = "Unspecified"
+        Case 1 : entryType = "Person"
+        Case 2 : entryType = "Server"
+        Case 3 : entryType = "Mixed Group"
+        Case 4 : entryType = "Person Group"
+        Case 5 : entryType = "Server Group"
+        End Select
+        out = out & "  " & aclEntry.Name & " | " & lvl & " | " & entryType & Chr(10)
+        Set aclEntry = acl.GetNextEntry(aclEntry)
+    Loop
+    On Error GoTo 0
+
+    ' ══════════════════════════════════════════════════════════
+    ' 5. REMINDER FORM FIELDS
+    ' ══════════════════════════════════════════════════════════
+    out = out & Chr(10) & "=== REMINDER FORM FIELDS ===" & Chr(10)
+    On Error Resume Next
+    Set remForm = db.GetForm("Reminder")
+    If Not remForm Is Nothing Then
+        remFields = remForm.Fields
+        If IsArray(remFields) Then
+            For j = 0 To UBound(remFields)
+                out = out & "  - " & CStr(remFields(j)) & Chr(10)
+            Next j
+        End If
+    Else
+        out = out & "  (Reminder form not found)" & Chr(10)
+    End If
+    On Error GoTo 0
+
+    ' ══════════════════════════════════════════════════════════
+    ' Write inventory
+    ' ══════════════════════════════════════════════════════════
+    fileNum = FreeFile()
+    Open invPath For Output As #fileNum
+    Print #fileNum, out
+    Close #fileNum
+
+    ' ══════════════════════════════════════════════════════════
+    ' 6. FULL DXL EXPORT
+    ' ══════════════════════════════════════════════════════════
+    Set ncAll = db.CreateNoteCollection(False)
+    ncAll.SelectForms = True
+    ncAll.SelectSubforms = True
+    ncAll.SelectViews = True
+    ncAll.SelectAgents = True
+    Call ncAll.BuildCollection
+
+    Set stream = sess.CreateStream()
+    Set exporter = sess.CreateDXLExporter(ncAll, stream)
+    exporter.ConvertNotesBitmapsToGIF = False
+    exporter.OutputDOCTYPE = False
+    Call exporter.Process()
+
+    stream.Position = 0
+    dxl = stream.ReadText()
+
+    fileNum2 = FreeFile()
+    Open dxlPath For Output As #fileNum2
+    chunkSize = 65536
+    pos = 1
+    Do While pos <= Len(dxl)
+        Print #fileNum2, Mid(dxl, pos, chunkSize);
+        pos = pos + chunkSize
+    Loop
+    Close #fileNum2
+
+    MsgBox "Done!" & Chr(10) & Chr(10) & _
+        "Inventory : " & invPath & Chr(10) & _
+        "Full DXL  : " & dxlPath & Chr(10) & Chr(10) & _
+        "DXL size  : " & Format(Len(dxl), "#,##0") & " chars"
+End Sub
